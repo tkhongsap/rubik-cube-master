@@ -18,6 +18,8 @@ interface MoveItem {
   type: MoveType;
 }
 
+type CubeSize = 3 | 4 | 5 | 6 | 7;
+
 const RubiksCube: React.FC = () => {
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
@@ -37,14 +39,19 @@ const RubiksCube: React.FC = () => {
   // State for moves display
   const [moves, setMoves] = useState<MoveItem[]>([]);
   const [currentSequenceType, setCurrentSequenceType] = useState<MoveType>(null);
+  
+  // State for cube size
+  const [cubeSize, setCubeSize] = useState<CubeSize>(3);
 
   // Constants
   const cubieSize = 1;
   const spacing = 0.05;
   const totalCubieSize = cubieSize + spacing;
-  const N = 3; // 3x3x3 cube
-  const halfN = (N - 1) / 2;
   const animationDuration = 300; // Duration in ms
+
+  // Computed values that depend on cube size
+  const N = cubeSize;
+  const halfN = (N - 1) / 2;
 
   // Standard Rubik's Cube Colors
   const colors = {
@@ -57,29 +64,57 @@ const RubiksCube: React.FC = () => {
     inside: new THREE.Color(0x333333) // Dark grey for inside faces
   };
 
-  // Convert internal move data to standard notation
+  // Convert internal move data to standard notation for various cube sizes
   const getMoveNotation = (axis: Axis, layerIndex: number, angle: number): string => {
-    const clockwise = angle > 0; // Determine direction based on angle convention
-    const prime = "'"; // Apostrophe for counter-clockwise
-
-    // Outer layers (F, B, U, D, R, L)
-    if (layerIndex === N - 1) { // Top/Right/Front layer (index 2)
-      if (axis === 'y') return clockwise ? "U'" : "U"; // Y-axis rotation: U/U' (Angle convention reversed for top)
-      if (axis === 'x') return clockwise ? "R" : "R'"; // X-axis rotation: R/R'
-      if (axis === 'z') return clockwise ? "F" : "F'"; // Z-axis rotation: F/F'
+    const prime = "'"; 
+    let face = '?'; 
+    let layerPrefix = ''; 
+    let clockwise = false;
+    
+    // Determine Face, Clockwise direction, and Layer Prefix based on axis, layerIndex, angle, N, halfN
+    if (axis === 'x') { // R/L faces
+      if (layerIndex > halfN) { // Closer to R face (index N-1)
+        face = 'R'; 
+        clockwise = angle > 0;
+        if (layerIndex < N - 1) layerPrefix = (N - 1 - layerIndex + 1).toString(); // 2R, 3R...
+      } else { // Closer to L face (index 0)
+        face = 'L'; 
+        clockwise = angle < 0; // Clockwise for L is negative angle
+        if (layerIndex > 0) layerPrefix = (layerIndex + 1).toString(); // 2L, 3L...
+      }
+    } else if (axis === 'y') { // U/D faces
+      if (layerIndex > halfN) { // Closer to U face (index N-1)
+        face = 'U'; 
+        clockwise = angle < 0; // Clockwise for U is negative angle
+        if (layerIndex < N - 1) layerPrefix = (N - 1 - layerIndex + 1).toString(); // 2U, 3U...
+      } else { // Closer to D face (index 0)
+        face = 'D'; 
+        clockwise = angle > 0;
+        if (layerIndex > 0) layerPrefix = (layerIndex + 1).toString(); // 2D, 3D...
+      }
+    } else if (axis === 'z') { // F/B faces
+      if (layerIndex > halfN) { // Closer to F face (index N-1)
+        face = 'F'; 
+        clockwise = angle > 0;
+        if (layerIndex < N - 1) layerPrefix = (N - 1 - layerIndex + 1).toString(); // 2F, 3F...
+      } else { // Closer to B face (index 0)
+        face = 'B'; 
+        clockwise = angle < 0; // Clockwise for B is negative angle
+        if (layerIndex > 0) layerPrefix = (layerIndex + 1).toString(); // 2B, 3B...
+      }
     }
-    if (layerIndex === 0) { // Bottom/Left/Back layer (index 0)
-      if (axis === 'y') return clockwise ? "D" : "D'"; // Y-axis rotation: D/D'
-      if (axis === 'x') return clockwise ? "L'" : "L"; // X-axis rotation: L/L' (Angle convention reversed for left)
-      if (axis === 'z') return clockwise ? "B'" : "B"; // Z-axis rotation: B/B' (Angle convention reversed for back)
+    
+    // For 3x3, use classic notation (M, E, S for middle layers)
+    if (N === 3) {
+      if (layerIndex === 1) {
+        if (axis === 'x') return clockwise ? "M'" : "M";
+        if (axis === 'y') return clockwise ? "E" : "E'";
+        if (axis === 'z') return clockwise ? "S" : "S'";
+      }
     }
-    // Middle layers (M, E, S)
-    if (layerIndex === 1) {
-       if (axis === 'y') return clockwise ? "E" : "E'"; // Y-axis rotation: E/E' (like D)
-       if (axis === 'x') return clockwise ? "M'" : "M"; // X-axis rotation: M/M' (like L, angle reversed)
-       if (axis === 'z') return clockwise ? "S" : "S'"; // Z-axis rotation: S/S' (like F)
-    }
-    return "?"; // Should not happen
+    
+    // Return formatted notation
+    return layerPrefix + face + (clockwise ? '' : prime);
   };
 
   // Add a move to the display
@@ -87,7 +122,7 @@ const RubiksCube: React.FC = () => {
     if (!moveType) return;
     
     setMoves(prevMoves => {
-      // Limit to last 30 moves
+      // Limit to last 40 moves
       const updatedMoves = [...prevMoves, { notation, type: moveType }];
       if (updatedMoves.length > 40) {
         return updatedMoves.slice(updatedMoves.length - 40);
@@ -110,6 +145,46 @@ const RubiksCube: React.FC = () => {
     setMoves([]);
   };
 
+  // Handle cube size change
+  const handleCubeSizeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const newSize = parseInt(event.target.value) as CubeSize;
+    if (isAnimatingRef.current) return; // Prevent change during animation
+    
+    if (newSize !== cubeSize) {
+      console.log(`Changing cube size to ${newSize}x${newSize}x${newSize}`);
+      setCubeSize(newSize);
+    }
+  };
+
+  // Effect to recreate cube when size changes
+  useEffect(() => {
+    if (sceneRef.current) {
+      // Adjust camera for new cube size
+      if (cameraRef.current) {
+        cameraRef.current.position.set(0, N * 1.5, N * 2.5);
+        cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
+      }
+      
+      // Adjust controls for new cube size
+      if (controlsRef.current) {
+        controlsRef.current.maxDistance = N * 5;
+        controlsRef.current.update();
+      }
+      
+      // Adjust lighting for new cube size
+      if (sceneRef.current) {
+        // Update directional light
+        sceneRef.current.children.forEach(child => {
+          if (child instanceof THREE.DirectionalLight) {
+            child.position.set(N, N * 2, N * 1.5);
+          }
+        });
+      }
+      
+      createCube();
+    }
+  }, [cubeSize]);
+
   // Set up the scene, camera, renderer and controls
   useEffect(() => {
     if (!containerRef.current) return;
@@ -126,7 +201,7 @@ const RubiksCube: React.FC = () => {
       0.1,
       1000
     );
-    camera.position.set(0, 4, 7);
+    camera.position.set(0, N * 1.5, N * 2.5);
     camera.lookAt(scene.position);
     cameraRef.current = camera;
 
@@ -141,8 +216,8 @@ const RubiksCube: React.FC = () => {
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.screenSpacePanning = false;
-    controls.minDistance = 5;
-    controls.maxDistance = 20;
+    controls.minDistance = 3;
+    controls.maxDistance = N * 5;
     controlsRef.current = controls;
 
     // Lighting
@@ -150,7 +225,7 @@ const RubiksCube: React.FC = () => {
     scene.add(ambientLight);
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    directionalLight.position.set(5, 10, 7.5);
+    directionalLight.position.set(N, N * 2, N * 1.5);
     scene.add(directionalLight);
 
     // Add cube group to scene
@@ -204,6 +279,8 @@ const RubiksCube: React.FC = () => {
 
   // Create the Rubik's Cube
   const createCube = () => {
+    console.log(`Creating ${N}x${N}x${N} cube...`);
+    
     // Clear existing cube and history
     while (cubeGroupRef.current.children.length > 0) {
       const child = cubeGroupRef.current.children[0];
@@ -212,6 +289,7 @@ const RubiksCube: React.FC = () => {
     
     scrambleHistoryRef.current = []; // Reset history ONLY on full cube creation/reset
     clearMovesDisplay();
+    animationQueueRef.current = []; // Clear animation queue
 
     const geometry = new THREE.BoxGeometry(cubieSize, cubieSize, cubieSize);
 
@@ -246,6 +324,7 @@ const RubiksCube: React.FC = () => {
       }
     }
     
+    console.log(`Cube created with ${cubeGroupRef.current.children.length} cubies.`);
     setButtonsDisabled(false);
   };
 
@@ -300,6 +379,15 @@ const RubiksCube: React.FC = () => {
   // Animate the rotation of a layer
   const animateLayerRotation = (axis: Axis, layerIndex: number, angle: number) => {
     const layer = getLayer(axis, layerIndex);
+    
+    // Skip the move if layer selection failed
+    if (layer.length === 0) {
+      console.warn(`Layer selection failed for axis ${axis}, index ${layerIndex}. Skipping move.`);
+      isAnimatingRef.current = false;
+      processAnimationQueue();
+      return;
+    }
+    
     const pivot = new THREE.Object3D();
     sceneRef.current?.add(pivot);
 
@@ -315,34 +403,30 @@ const RubiksCube: React.FC = () => {
       .to(targetRotation, animationDuration)
       .easing(TWEEN.Easing.Quadratic.InOut)
       .onComplete(() => {
+        const currentHalfN = (N - 1) / 2; // Use N applicable at end of move
+        
         // Animation finished for this move
         layer.forEach(cubie => {
-          // Get world matrix after pivot rotation
-          cubie.updateMatrixWorld();
-          const worldPosition = new THREE.Vector3();
-          const worldQuaternion = new THREE.Quaternion();
-          cubie.getWorldPosition(worldPosition);
-          cubie.getWorldQuaternion(worldQuaternion);
-
-          // Remove from pivot and add back to the main group
+          // Re-attach to cube group
           cubeGroupRef.current.attach(cubie);
-
-          // Update the 'initialWorldPos' based on the new logical position
-          const logicalX = Math.round(worldPosition.x / totalCubieSize) + halfN;
-          const logicalY = Math.round(worldPosition.y / totalCubieSize) + halfN;
-          const logicalZ = Math.round(worldPosition.z / totalCubieSize) + halfN;
+          
+          // Update userData.initialWorldPos based on final position
+          const logicalX = Math.round(cubie.position.x / totalCubieSize + currentHalfN);
+          const logicalY = Math.round(cubie.position.y / totalCubieSize + currentHalfN);
+          const logicalZ = Math.round(cubie.position.z / totalCubieSize + currentHalfN);
+          
+          // Clamp to ensure positions are valid for the cube
+          const clampedX = Math.max(0, Math.min(N - 1, logicalX));
+          const clampedY = Math.max(0, Math.min(N - 1, logicalY));
+          const clampedZ = Math.max(0, Math.min(N - 1, logicalZ));
+          
           cubie.userData.initialWorldPos.set(
-            (logicalX - halfN) * totalCubieSize,
-            (logicalY - halfN) * totalCubieSize,
-            (logicalZ - halfN) * totalCubieSize
+            (clampedX - currentHalfN) * totalCubieSize,
+            (clampedY - currentHalfN) * totalCubieSize,
+            (clampedZ - currentHalfN) * totalCubieSize
           );
           
-          // Position correction and snap rotation
-          cubie.position.copy(worldPosition);
-          cubie.quaternion.copy(worldQuaternion);
-          cubie.position.x = Math.round(cubie.position.x / totalCubieSize) * totalCubieSize;
-          cubie.position.y = Math.round(cubie.position.y / totalCubieSize) * totalCubieSize;
-          cubie.position.z = Math.round(cubie.position.z / totalCubieSize) * totalCubieSize;
+          // Snap visual rotation
           snapRotation(cubie);
         });
 
@@ -368,10 +452,10 @@ const RubiksCube: React.FC = () => {
     // Clear animation queue (but not scramble history)
     animationQueueRef.current = [];
     
-    // Generate new scramble moves
-    const numScrambleMoves = 20;
+    // Generate new scramble moves (scale with cube size)
+    const numScrambleMoves = N * N; // Larger cubes need more scramble moves
     const moves: Axis[] = ['x', 'y', 'z'];
-    const layers = [0, 1, 2];
+    const layers = Array.from({ length: N }, (_, i) => i); // All layers for larger cubes
     const angles = [Math.PI/2, -Math.PI/2];
     
     for (let i = 0; i < numScrambleMoves; i++) {
@@ -453,9 +537,23 @@ const RubiksCube: React.FC = () => {
 
   return (
     <div className="relative w-full h-full">
-      {/* Top bar */}
-      <div id="top-bar" className="absolute top-0 left-0 w-full p-4 bg-white/80 backdrop-blur-md shadow-sm z-10 text-center">
+      {/* Top bar with cube size selector */}
+      <div className="absolute top-0 left-0 w-full p-3 bg-white/80 backdrop-blur-md shadow-sm z-10 flex justify-between items-center">
         <h1 className="m-0 text-lg font-semibold text-slate-800">Rubik's Cube Simulation</h1>
+        <div>
+          <select 
+            className="py-1 px-3 border border-slate-300 rounded-md bg-white text-sm font-medium text-slate-700 cursor-pointer"
+            value={cubeSize}
+            onChange={handleCubeSizeChange}
+            disabled={buttonsDisabled}
+          >
+            <option value={3}>3x3x3</option>
+            <option value={4}>4x4x4</option>
+            <option value={5}>5x5x5</option>
+            <option value={6}>6x6x6</option>
+            <option value={7}>7x7x7</option>
+          </select>
+        </div>
       </div>
       
       {/* Container for the 3D scene */}
@@ -465,7 +563,7 @@ const RubiksCube: React.FC = () => {
       <div 
         ref={movesDisplayRef}
         id="moves-display" 
-        className="absolute top-24 right-5 w-44 max-h-[calc(100vh-180px)] p-2.5 bg-slate-900/85 rounded-lg overflow-y-auto z-5 shadow-[0_0_15px_rgba(50,205,50,0.4)] border border-[rgba(50,205,50,0.3)]"
+        className="absolute top-16 right-5 w-44 max-h-[calc(100vh-180px)] p-2.5 bg-slate-900/85 rounded-lg overflow-y-auto z-5 shadow-[0_0_15px_rgba(50,205,50,0.4)] border border-[rgba(50,205,50,0.3)]"
       >
         {renderMoveRows()}
       </div>
