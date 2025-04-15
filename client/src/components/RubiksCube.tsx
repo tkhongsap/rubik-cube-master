@@ -1,8 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as TWEEN from 'three/examples/jsm/libs/tween.module.js';
-import { Button } from './ui/button';
 
 // Types
 type Axis = 'x' | 'y' | 'z';
@@ -15,14 +14,21 @@ type Move = {
 const RubiksCube: React.FC = () => {
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
+  const movesDisplayRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const controlsRef = useRef<OrbitControls | null>(null);
+  const controlsRef = useRef<any>(null);
   const cubeGroupRef = useRef<THREE.Group>(new THREE.Group());
   const animationQueueRef = useRef<Move[]>([]);
   const scrambleHistoryRef = useRef<Move[]>([]);
   const isAnimatingRef = useRef<boolean>(false);
+  
+  // State for button disabled status
+  const [buttonsDisabled, setButtonsDisabled] = useState(false);
+  
+  // State for moves display
+  const [moves, setMoves] = useState<string[]>([]);
 
   // Constants
   const cubieSize = 1;
@@ -43,6 +49,57 @@ const RubiksCube: React.FC = () => {
     inside: new THREE.Color(0x333333) // Dark grey for inside faces
   };
 
+  // Convert internal move data to standard notation
+  const getMoveNotation = (axis: Axis, layerIndex: number, angle: number): string => {
+    const clockwise = angle > 0; // Determine direction based on angle convention
+    const prime = "'"; // Apostrophe for counter-clockwise
+
+    // Outer layers (F, B, U, D, R, L)
+    if (layerIndex === N - 1) { // Top/Right/Front layer (index 2)
+      if (axis === 'y') return clockwise ? "U'" : "U"; // Y-axis rotation: U/U' (Angle convention reversed for top)
+      if (axis === 'x') return clockwise ? "R" : "R'"; // X-axis rotation: R/R'
+      if (axis === 'z') return clockwise ? "F" : "F'"; // Z-axis rotation: F/F'
+    }
+    if (layerIndex === 0) { // Bottom/Left/Back layer (index 0)
+      if (axis === 'y') return clockwise ? "D" : "D'"; // Y-axis rotation: D/D'
+      if (axis === 'x') return clockwise ? "L'" : "L"; // X-axis rotation: L/L' (Angle convention reversed for left)
+      if (axis === 'z') return clockwise ? "B'" : "B"; // Z-axis rotation: B/B' (Angle convention reversed for back)
+    }
+    // Middle layers (M, E, S)
+    if (layerIndex === 1) {
+       if (axis === 'y') return clockwise ? "E" : "E'"; // Y-axis rotation: E/E' (like D)
+       if (axis === 'x') return clockwise ? "M'" : "M"; // X-axis rotation: M/M' (like L, angle reversed)
+       if (axis === 'z') return clockwise ? "S" : "S'"; // Z-axis rotation: S/S' (like F)
+    }
+    return "?"; // Should not happen
+  };
+
+  // Add a move to the display
+  const addMoveToDisplay = (notation: string) => {
+    setMoves(prevMoves => {
+      // Limit to last 30 moves
+      const updatedMoves = [...prevMoves, notation];
+      if (updatedMoves.length > 30) {
+        return updatedMoves.slice(updatedMoves.length - 30);
+      }
+      return updatedMoves;
+    });
+    
+    // Auto-scroll to bottom of moves display
+    if (movesDisplayRef.current) {
+      setTimeout(() => {
+        if (movesDisplayRef.current) {
+          movesDisplayRef.current.scrollTop = movesDisplayRef.current.scrollHeight;
+        }
+      }, 0);
+    }
+  };
+
+  // Clear the moves display
+  const clearMovesDisplay = () => {
+    setMoves([]);
+  };
+
   // Set up the scene, camera, renderer and controls
   useEffect(() => {
     if (!containerRef.current) return;
@@ -59,13 +116,12 @@ const RubiksCube: React.FC = () => {
       0.1,
       1000
     );
-    camera.position.z = 7;
-    camera.position.y = 4;
+    camera.position.set(0, 4, 7);
     camera.lookAt(scene.position);
     cameraRef.current = camera;
 
     // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
@@ -80,10 +136,10 @@ const RubiksCube: React.FC = () => {
     controlsRef.current = controls;
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
     directionalLight.position.set(5, 10, 7.5);
     scene.add(directionalLight);
 
@@ -94,7 +150,7 @@ const RubiksCube: React.FC = () => {
     createCube();
 
     // Animation loop
-    const animate = () => {
+    const animate = (time?: number) => {
       requestAnimationFrame(animate);
       
       // Update controls
@@ -103,7 +159,7 @@ const RubiksCube: React.FC = () => {
       }
 
       // Update TWEEN
-      TWEEN.update();
+      TWEEN.update(time);
 
       // Process animation queue
       processAnimationQueue();
@@ -145,6 +201,7 @@ const RubiksCube: React.FC = () => {
     }
     
     scrambleHistoryRef.current = [];
+    clearMovesDisplay();
 
     const geometry = new THREE.BoxGeometry(cubieSize, cubieSize, cubieSize);
 
@@ -178,6 +235,8 @@ const RubiksCube: React.FC = () => {
         }
       }
     }
+    
+    setButtonsDisabled(false);
   };
 
   // Helper to get cubies in a specific layer based on initial position
@@ -195,29 +254,35 @@ const RubiksCube: React.FC = () => {
     return layer;
   };
 
+  // Helper to snap rotation
+  const snapRotation = (object: THREE.Object3D) => {
+    const euler = new THREE.Euler().setFromQuaternion(object.quaternion, 'XYZ');
+    euler.x = Math.round(euler.x / (Math.PI / 2)) * (Math.PI / 2);
+    euler.y = Math.round(euler.y / (Math.PI / 2)) * (Math.PI / 2);
+    euler.z = Math.round(euler.z / (Math.PI / 2)) * (Math.PI / 2);
+    object.quaternion.setFromEuler(euler);
+  };
+
   // Process the animation queue
   const processAnimationQueue = () => {
     if (isAnimatingRef.current || animationQueueRef.current.length === 0) {
       if (!isAnimatingRef.current && animationQueueRef.current.length === 0) {
         // Re-enable buttons when queue is empty
-        const scrambleButton = document.getElementById('scrambleButton');
-        const solveButton = document.getElementById('solveButton');
-        if (scrambleButton) scrambleButton.removeAttribute('disabled');
-        if (solveButton) solveButton.removeAttribute('disabled');
+        setButtonsDisabled(false);
         console.log("Animation queue complete.");
       }
       return;
     }
 
     isAnimatingRef.current = true;
-    
-    // Disable buttons during animation
-    const scrambleButton = document.getElementById('scrambleButton');
-    const solveButton = document.getElementById('solveButton');
-    if (scrambleButton) scrambleButton.setAttribute('disabled', 'true');
-    if (solveButton) solveButton.setAttribute('disabled', 'true');
+    setButtonsDisabled(true);
 
     const move = animationQueueRef.current.shift()!;
+    
+    // Add move notation to display before starting animation
+    const notation = getMoveNotation(move.axis, move.layerIndex, move.angle);
+    addMoveToDisplay(notation);
+    
     animateLayerRotation(move.axis, move.layerIndex, move.angle);
   };
 
@@ -260,6 +325,14 @@ const RubiksCube: React.FC = () => {
             (logicalY - halfN) * totalCubieSize,
             (logicalZ - halfN) * totalCubieSize
           );
+          
+          // Position correction and snap rotation
+          cubie.position.copy(worldPosition);
+          cubie.quaternion.copy(worldQuaternion);
+          cubie.position.x = Math.round(cubie.position.x / totalCubieSize) * totalCubieSize;
+          cubie.position.y = Math.round(cubie.position.y / totalCubieSize) * totalCubieSize;
+          cubie.position.z = Math.round(cubie.position.z / totalCubieSize) * totalCubieSize;
+          snapRotation(cubie);
         });
 
         // Remove pivot
@@ -275,86 +348,99 @@ const RubiksCube: React.FC = () => {
   // Scramble the cube
   const scrambleCube = () => {
     if (isAnimatingRef.current || animationQueueRef.current.length > 0) return;
+    
+    console.log("Queueing scramble moves...");
+    setButtonsDisabled(true);
+    clearMovesDisplay();
 
     // Clear any existing history and queue
     scrambleHistoryRef.current = [];
     animationQueueRef.current = [];
 
-    const moves = generateScrambleSequence(20); // Generate 20 random moves
+    const numScrambleMoves = 20;
+    const moves: Axis[] = ['x', 'y', 'z'];
+    const layers = [0, 1, 2];
+    const angles = [Math.PI/2, -Math.PI/2];
     
-    // Add moves to queue and record in history for solving later
-    moves.forEach(move => {
-      animationQueueRef.current.push(move);
+    for (let i = 0; i < numScrambleMoves; i++) {
+      const randomAxis = moves[Math.floor(Math.random() * moves.length)];
+      const randomLayer = layers[Math.floor(Math.random() * layers.length)];
+      const randomAngle = angles[Math.floor(Math.random() * angles.length)];
       
-      // Store the inverse move in the history for solving
-      const inverseMove = {
-        axis: move.axis,
-        layerIndex: move.layerIndex,
-        angle: -move.angle
+      const move = { 
+        axis: randomAxis, 
+        layerIndex: randomLayer, 
+        angle: randomAngle 
       };
-      scrambleHistoryRef.current.unshift(inverseMove);
-    });
-
-    // Start processing the queue
-    processAnimationQueue();
-  };
-
-  // Generate a sequence of random moves for scrambling
-  const generateScrambleSequence = (moveCount: number): Move[] => {
-    const moves: Move[] = [];
-    const axes: Axis[] = ['x', 'y', 'z'];
-    const angles = [Math.PI/2, -Math.PI/2]; // 90 degrees clockwise or counterclockwise
-
-    let lastAxis: Axis | null = null;
-    
-    for (let i = 0; i < moveCount; i++) {
-      let axis: Axis;
       
-      // Avoid consecutive moves on the same axis for better scrambling
-      do {
-        axis = axes[Math.floor(Math.random() * axes.length)];
-      } while (axis === lastAxis && axes.length > 1);
-      
-      lastAxis = axis;
-      
-      // Layer indices for a 3x3 cube are 0, 1, 2
-      const layerIndex = Math.floor(Math.random() * N);
-      const angle = angles[Math.floor(Math.random() * angles.length)];
-      
-      moves.push({ axis, layerIndex, angle });
+      animationQueueRef.current.push(move);
+      scrambleHistoryRef.current.push(move);
     }
-    
-    return moves;
+
+    console.log(`Added ${numScrambleMoves} moves to queue.`);
+    processAnimationQueue();
   };
 
   // Solve the cube
   const solveCubeAnimated = () => {
-    if (isAnimatingRef.current || animationQueueRef.current.length > 0) return;
+    if (isAnimatingRef.current || scrambleHistoryRef.current.length === 0) return;
     
-    // Add all moves from scramble history to animation queue
-    animationQueueRef.current = [...scrambleHistoryRef.current];
+    console.log("Queueing solve moves (reversing scramble)...");
+    setButtonsDisabled(true);
+    clearMovesDisplay();
     
-    // Clear the history since we're solving back to the start
+    // Create reversed moves with inverted angles
+    const solveMoves = scrambleHistoryRef.current.slice().reverse().map(move => ({
+      axis: move.axis,
+      layerIndex: move.layerIndex,
+      angle: -move.angle
+    }));
+    
+    animationQueueRef.current.push(...solveMoves);
     scrambleHistoryRef.current = [];
     
-    // Start processing the queue
+    console.log(`Added ${solveMoves.length} solve moves to queue.`);
     processAnimationQueue();
   };
 
   return (
-    <div ref={containerRef} id="container">
-      <div id="controls">
+    <div className="relative w-full h-full">
+      {/* Top bar */}
+      <div id="top-bar" className="absolute top-0 left-0 w-full p-4 bg-white/80 backdrop-blur-md shadow-sm z-10 text-center">
+        <h1 className="m-0 text-lg font-semibold text-slate-800">Rubik's Cube Simulation</h1>
+      </div>
+      
+      {/* Container for the 3D scene */}
+      <div ref={containerRef} id="container" className="absolute top-0 left-0 w-full h-full z-1"></div>
+      
+      {/* Moves display panel */}
+      <div 
+        ref={movesDisplayRef}
+        id="moves-display" 
+        className="absolute top-24 right-5 w-20 max-h-[calc(100vh-180px)] p-2.5 bg-slate-900/80 rounded-lg overflow-y-auto z-5 shadow-[0_0_15px_rgba(50,205,50,0.4)] border border-[rgba(50,205,50,0.3)]"
+      >
+        {moves.map((move, index) => (
+          <p key={index} className="text-emerald-400 font-mono text-sm m-0.5 text-center whitespace-nowrap">
+            {move}
+          </p>
+        ))}
+      </div>
+      
+      {/* Controls */}
+      <div id="controls" className="absolute bottom-8 left-1/2 transform -translate-x-1/2 flex gap-3 p-3 bg-white/75 backdrop-blur-md rounded-xl shadow-lg z-10">
         <button 
           id="scrambleButton" 
-          className="button" 
+          className="py-2.5 px-5 rounded-md font-medium text-sm text-slate-50 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           onClick={scrambleCube}
+          disabled={buttonsDisabled}
         >
           Scramble
         </button>
         <button 
           id="solveButton" 
-          className="button" 
+          className="py-2.5 px-5 rounded-md font-medium text-sm text-emerald-50 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           onClick={solveCubeAnimated}
+          disabled={buttonsDisabled}
         >
           Solve
         </button>
