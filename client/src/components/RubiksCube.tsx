@@ -418,26 +418,31 @@ const RubiksCube: React.FC = () => {
 
   // Organize moves into rows for display
   const renderMoveRows = () => {
-    const rows = [];
-    let currentRow = [];
+    if (moves.length === 0) {
+      return null;
+    }
     
-    for (let i = 0; i < moves.length; i++) {
-      currentRow.push(moves[i]);
-      
-      // Create a new row after every 4 moves or if it's the last move
-      if (currentRow.length === 4 || i === moves.length - 1) {
-        rows.push([...currentRow]);
-        currentRow = [];
-      }
+    // Group moves into rows of 4
+    const rows = [];
+    for (let i = 0; i < moves.length; i += 4) {
+      rows.push(moves.slice(i, i + 4));
     }
     
     return rows.map((row, rowIndex) => (
-      <div key={`row-${rowIndex}`} className="grid grid-cols-4 gap-1 mb-0.5">
+      <div 
+        key={`row-${rowIndex}`} 
+        className="grid grid-cols-4 gap-1 mb-0.5"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}
+      >
         {row.map((move, moveIndex) => (
           <span 
             key={`${rowIndex}-${moveIndex}`} 
-            className={`font-mono text-sm text-center p-px rounded whitespace-nowrap
-              ${move.type === 'scramble' ? 'text-emerald-400' : 'text-blue-400'}`}
+            className={`font-mono text-sm text-center p-px rounded`}
+            style={{ 
+              color: move.type === 'scramble' ? '#34d399' : '#60a5fa',
+              whiteSpace: 'nowrap',
+              padding: '1px 3px'
+            }}
           >
             {move.notation}
           </span>
