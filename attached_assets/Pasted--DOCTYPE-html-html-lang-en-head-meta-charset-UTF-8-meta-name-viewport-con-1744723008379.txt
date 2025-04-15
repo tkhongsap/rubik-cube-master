@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rubik's Cube Simulation (Animated)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; background-color: #f0f0f0; }
+        #container { width: 100vw; height: 100vh; display: block; }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px; /* Spacing between buttons */
+            padding: 10px;
+            background-color: rgba(255, 255, 255, 0.8); /* Semi-transparent white background */
+            border-radius: 8px; /* Rounded corners */
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2); /* Subtle shadow */
+        }
+        button {
+            padding: 10px 20px; /* Button padding */
+            border: none; /* Remove default border */
+            border-radius: 6px; /* Rounded corners for buttons */
+            cursor: pointer; /* Pointer cursor on hover */
+            font-weight: 600; /* Bold text */
+            transition: background-color 0.3s ease, opacity 0.3s ease; /* Smooth transitions */
+        }
+        button:disabled {
+            opacity: 0.5; /* Dim disabled buttons */
+            cursor: not-allowed; /* Indicate disabled state */
+        }
+        #scrambleButton {
+            background-color: #3b82f6; /* Blue */
+            color: white;
+        }
+        #scrambleButton:hover:not(:disabled) {
+            background-color: #2563eb; /* Darker blue on hover */
+        }
+        #solveButton {
+            background-color: #10b981; /* Green */
+            color: white;
+        }
+        #solveButton:hover:not(:disabled) {
+            background-color: #059669; /* Darker green on hover */
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+
+    <div id="controls">
+        <button id="scrambleButton">Scramble</button>
+        <button id="solveButton">Solve</button>
+    </div>
+
+    <script>
+        // --- Global Variables ---
+        let scene, camera, renderer, controls;
+        const cubeGroup = new THREE.Group(); // Group to hold all cubies
+        const cubieSize = 1; // Size of each small cube (cubie)
+        const spacing = 0.05; // Spacing between cubies
+        const totalCubieSize = cubieSize + spacing; // Size including spacing
+        const N = 3; // Dimension of the cube (3x3x3)
+        const halfN = (N - 1) / 2; // Helper for positioning
+
+        let isAnimating = false; // Flag to prevent concurrent animations
+        const animationQueue = []; // Queue for sequential animations
+        let scrambleHistory = []; // Store scramble moves to reverse for solve
+
+        const animationDuration = 300; // Duration of each twist animation in ms
+
+        // Standard Rubik's Cube Colors
+        const colors = {
+            right:  new THREE.Color(0x0000FF), // Blue
+            left:   new THREE.Color(0x00FF00), // Green
+            top:    new THREE.Color(0xFFFFFF), // White
+            bottom: new THREE.Color(0xFFFF00), // Yellow
+            front:  new THREE.Color(0xFF0000), // Red
+            back:   new THREE.Color(0xFFA500), // Orange
+            inside: new THREE.Color(0x333333)  // Dark grey for inside faces
+        };
+
+        // --- Initialization ---
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f0f0); // Light grey background
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 7;
+            camera.position.y = 4;
+            camera.lookAt(scene.position);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // OrbitControls setup
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 5;
+            controls.maxDistance = 20;
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+            // Create the Rubik's Cube
+            createCube();
+            scene.add(cubeGroup);
+
+            // Event Listeners
+            document.getElementById('scrambleButton').addEventListener('click', scrambleCube);
+            document.getElementById('solveButton').addEventListener('click', solveCubeAnimated); // Changed to animated solve
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Start animation loop
+            animate();
+        }
+
+        // --- Create Cube ---
+        function createCube() {
+            // Clear existing cube and history
+            while(cubeGroup.children.length > 0){
+                const child = cubeGroup.children[0];
+                cubeGroup.remove(child);
+                // Optional: Dispose geometry/material if memory becomes an issue
+                // child.geometry.dispose();
+                // child.material.forEach(mat => mat.dispose());
+            }
+            scrambleHistory = []; // Reset history when creating a new cube
+
+            const geometry = new THREE.BoxGeometry(cubieSize, cubieSize, cubieSize);
+
+            for (let x = 0; x < N; x++) {
+                for (let y = 0; y < N; y++) {
+                    for (let z = 0; z < N; z++) {
+                        if (x > 0 && x < N - 1 && y > 0 && y < N - 1 && z > 0 && z < N - 1) {
+                            continue; // Skip inner core
+                        }
+
+                        const materials = [
+                            (x === N - 1) ? new THREE.MeshStandardMaterial({ color: colors.right }) : new THREE.MeshStandardMaterial({ color: colors.inside }), // +X
+                            (x === 0) ? new THREE.MeshStandardMaterial({ color: colors.left }) : new THREE.MeshStandardMaterial({ color: colors.inside }),   // -X
+                            (y === N - 1) ? new THREE.MeshStandardMaterial({ color: colors.top }) : new THREE.MeshStandardMaterial({ color: colors.inside }),    // +Y
+                            (y === 0) ? new THREE.MeshStandardMaterial({ color: colors.bottom }) : new THREE.MeshStandardMaterial({ color: colors.inside }), // -Y
+                            (z === N - 1) ? new THREE.MeshStandardMaterial({ color: colors.front }) : new THREE.MeshStandardMaterial({ color: colors.inside }),  // +Z
+                            (z === 0) ? new THREE.MeshStandardMaterial({ color: colors.back }) : new THREE.MeshStandardMaterial({ color: colors.inside })    // -Z
+                        ];
+
+                        const cubie = new THREE.Mesh(geometry, materials);
+                        cubie.position.set(
+                            (x - halfN) * totalCubieSize,
+                            (y - halfN) * totalCubieSize,
+                            (z - halfN) * totalCubieSize
+                        );
+                        // Store initial world position (useful for layer selection)
+                        cubie.userData.initialWorldPos = cubie.position.clone();
+                        cubeGroup.add(cubie);
+                    }
+                }
+            }
+             // Initial state: enable buttons
+            setButtonsEnabled(true);
+        }
+
+         // --- UI Control ---
+         function setButtonsEnabled(enabled) {
+            document.getElementById('scrambleButton').disabled = !enabled;
+            document.getElementById('solveButton').disabled = !enabled;
+         }
+
+        // --- Cube Operations ---
+
+        // Helper function to get cubies in a specific layer based on INITIAL position
+        function getLayer(axis, layerIndex) {
+            const layer = [];
+            // Use initial position for reliable layer identification after rotations
+            const threshold = totalCubieSize * (layerIndex - halfN);
+            const tolerance = 0.1;
+
+            cubeGroup.children.forEach(cubie => {
+                // Use the axis corresponding to the initial world position stored
+                if (Math.abs(cubie.userData.initialWorldPos[axis] - threshold) < tolerance) {
+                    layer.push(cubie);
+                }
+            });
+            return layer;
+        }
+
+        // --- Animation Queue Processing ---
+        function processAnimationQueue() {
+            if (isAnimating || animationQueue.length === 0) {
+                if (!isAnimating && animationQueue.length === 0) {
+                     setButtonsEnabled(true); // Re-enable buttons when queue is empty
+                     console.log("Animation queue complete.");
+                }
+                return;
+            }
+
+            isAnimating = true;
+            setButtonsEnabled(false); // Disable buttons during animation
+
+            const move = animationQueue.shift(); // Get the next move
+            animateLayerRotation(move.axis, move.layerIndex, move.angle);
+        }
+
+        // Animate the rotation of a layer
+        function animateLayerRotation(axis, layerIndex, angle) {
+            const layer = getLayer(axis, layerIndex);
+            const pivot = new THREE.Object3D();
+            scene.add(pivot);
+
+            // Use initial positions to calculate pivot center if needed, though (0,0,0) works here
+            // pivot.position.set(0, 0, 0); // Pivot around the center of the cube
+
+             // Attach cubies to pivot
+            layer.forEach(cubie => {
+                // We need to calculate the cubie's position relative to the pivot
+                // Since pivot is at origin, world position IS the relative position
+                pivot.attach(cubie);
+            });
+
+            const targetRotation = {};
+            targetRotation[axis] = angle; // Target rotation angle for the specified axis
+
+            const tween = new TWEEN.Tween(pivot.rotation)
+                .to(targetRotation, animationDuration) // Animate to the target angle
+                .easing(TWEEN.Easing.Quadratic.InOut) // Smooth easing function
+                .onComplete(() => {
+                    // Animation finished for this move
+
+                    // Detach cubies and re-attach to the main cube group
+                    layer.forEach(cubie => {
+                        // Get world matrix after pivot rotation
+                        cubie.updateMatrixWorld(); // Ensure matrix is up-to-date
+                        const worldPosition = new THREE.Vector3();
+                        const worldQuaternion = new THREE.Quaternion();
+                        cubie.getWorldPosition(worldPosition);
+                        cubie.getWorldQuaternion(worldQuaternion);
+
+                        // Remove from pivot and add back to the main group
+                        cubeGroup.attach(cubie); // This preserves world transform
+
+                        // Update the 'initialWorldPos' based on the new logical position
+                        // This is crucial for subsequent layer selections
+                        const logicalX = Math.round(worldPosition.x / totalCubieSize) + halfN;
+                        const logicalY = Math.round(worldPosition.y / totalCubieSize) + halfN;
+                        const logicalZ = Math.round(worldPosition.z / totalCubieSize) + halfN;
+                        cubie.userData.initialWorldPos.set(
+                            (logicalX - halfN) * totalCubieSize,
+                            (logicalY - halfN) * totalCubieSize,
+                            (logicalZ - halfN) * totalCubieSize
+                        );
+
+                         // Optional: Snap position/rotation precisely to avoid drift
+                         cubie.position.copy(worldPosition);
+                         cubie.quaternion.copy(worldQuaternion);
+                         cubie.position.x = Math.round(cubie.position.x / totalCubieSize) * totalCubieSize;
+                         cubie.position.y = Math.round(cubie.position.y / totalCubieSize) * totalCubieSize;
+                         cubie.position.z = Math.round(cubie.position.z / totalCubieSize) * totalCubieSize;
+
+                         // Snap rotation to nearest 90 degrees to fix potential drift
+                         snapRotation(cubie);
+
+                    });
+
+                    scene.remove(pivot); // Clean up the pivot object
+                    isAnimating = false; // Allow next animation
+                    processAnimationQueue(); // Process the next move in the queue
+                })
+                .start(); // Start the tween animation
+        }
+
+        // Helper to snap rotation to nearest 90 degrees on primary axes
+        function snapRotation(object) {
+            const euler = new THREE.Euler().setFromQuaternion(object.quaternion, 'XYZ');
+            euler.x = Math.round(euler.x / (Math.PI / 2)) * (Math.PI / 2);
+            euler.y = Math.round(euler.y / (Math.PI / 2)) * (Math.PI / 2);
+            euler.z = Math.round(euler.z / (Math.PI / 2)) * (Math.PI / 2);
+            object.quaternion.setFromEuler(euler);
+        }
+
+        // Scramble the cube with animated random moves
+        function scrambleCube() {
+            if (isAnimating) return; // Don't scramble if already animating
+            console.log("Queueing scramble moves...");
+            setButtonsEnabled(false); // Disable buttons immediately
+
+            const moves = ['x', 'y', 'z'];
+            const layers = [0, 1, 2];
+            const angles = [Math.PI / 2, -Math.PI / 2];
+            const numScrambleMoves = 20;
+
+            scrambleHistory = []; // Clear previous scramble history
+
+            for (let i = 0; i < numScrambleMoves; i++) {
+                const randomAxis = moves[Math.floor(Math.random() * moves.length)];
+                const randomLayer = layers[Math.floor(Math.random() * layers.length)];
+                const randomAngle = angles[Math.floor(Math.random() * angles.length)];
+
+                const move = { axis: randomAxis, layerIndex: randomLayer, angle: randomAngle };
+                animationQueue.push(move);
+                scrambleHistory.push(move); // Record the move
+            }
+            console.log(`Added ${numScrambleMoves} moves to queue.`);
+            processAnimationQueue(); // Start processing the queue
+        }
+
+        // Solve the cube by reversing the scramble moves
+        function solveCubeAnimated() {
+             if (isAnimating || scrambleHistory.length === 0) return; // Don't solve if animating or no history
+             console.log("Queueing solve moves (reversing scramble)...");
+             setButtonsEnabled(false); // Disable buttons immediately
+
+             // Reverse the scramble history
+             const solveMoves = scrambleHistory.slice().reverse().map(move => ({
+                axis: move.axis,
+                layerIndex: move.layerIndex,
+                angle: -move.angle // Reverse the angle
+             }));
+
+             animationQueue.push(...solveMoves); // Add solve moves to the queue
+             scrambleHistory = []; // Clear history after queueing solve
+             console.log(`Added ${solveMoves.length} solve moves to queue.`);
+             processAnimationQueue(); // Start processing
+        }
+
+
+        // --- Animation Loop ---
+        function animate(time) {
+            requestAnimationFrame(animate); // Request next frame
+
+            TWEEN.update(time); // Update all active tweens
+            controls.update(); // Update camera controls
+
+            renderer.render(scene, camera); // Render the scene
+        }
+
+        // --- Event Handlers ---
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- Start ---
+        init();
+
+    </script>
+</body>
+</html>
