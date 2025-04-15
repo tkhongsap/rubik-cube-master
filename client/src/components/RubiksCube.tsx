@@ -11,6 +11,13 @@ type Move = {
   angle: number
 };
 
+type MoveType = 'scramble' | 'solve' | null;
+
+interface MoveItem {
+  notation: string;
+  type: MoveType;
+}
+
 const RubiksCube: React.FC = () => {
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
@@ -28,7 +35,8 @@ const RubiksCube: React.FC = () => {
   const [buttonsDisabled, setButtonsDisabled] = useState(false);
   
   // State for moves display
-  const [moves, setMoves] = useState<string[]>([]);
+  const [moves, setMoves] = useState<MoveItem[]>([]);
+  const [currentSequenceType, setCurrentSequenceType] = useState<MoveType>(null);
 
   // Constants
   const cubieSize = 1;
@@ -75,12 +83,14 @@ const RubiksCube: React.FC = () => {
   };
 
   // Add a move to the display
-  const addMoveToDisplay = (notation: string) => {
+  const addMoveToDisplay = (notation: string, moveType: MoveType) => {
+    if (!moveType) return;
+    
     setMoves(prevMoves => {
       // Limit to last 30 moves
-      const updatedMoves = [...prevMoves, notation];
-      if (updatedMoves.length > 30) {
-        return updatedMoves.slice(updatedMoves.length - 30);
+      const updatedMoves = [...prevMoves, { notation, type: moveType }];
+      if (updatedMoves.length > 40) {
+        return updatedMoves.slice(updatedMoves.length - 40);
       }
       return updatedMoves;
     });
@@ -200,7 +210,7 @@ const RubiksCube: React.FC = () => {
       cubeGroupRef.current.remove(child);
     }
     
-    scrambleHistoryRef.current = [];
+    scrambleHistoryRef.current = []; // Reset history ONLY on full cube creation/reset
     clearMovesDisplay();
 
     const geometry = new THREE.BoxGeometry(cubieSize, cubieSize, cubieSize);
@@ -269,6 +279,7 @@ const RubiksCube: React.FC = () => {
       if (!isAnimatingRef.current && animationQueueRef.current.length === 0) {
         // Re-enable buttons when queue is empty
         setButtonsDisabled(false);
+        setCurrentSequenceType(null);
         console.log("Animation queue complete.");
       }
       return;
@@ -281,7 +292,7 @@ const RubiksCube: React.FC = () => {
     
     // Add move notation to display before starting animation
     const notation = getMoveNotation(move.axis, move.layerIndex, move.angle);
-    addMoveToDisplay(notation);
+    addMoveToDisplay(notation, currentSequenceType);
     
     animateLayerRotation(move.axis, move.layerIndex, move.angle);
   };
@@ -352,11 +363,12 @@ const RubiksCube: React.FC = () => {
     console.log("Queueing scramble moves...");
     setButtonsDisabled(true);
     clearMovesDisplay();
+    setCurrentSequenceType('scramble');
 
-    // Clear any existing history and queue
-    scrambleHistoryRef.current = [];
+    // Clear animation queue (but not scramble history)
     animationQueueRef.current = [];
-
+    
+    // Generate new scramble moves
     const numScrambleMoves = 20;
     const moves: Axis[] = ['x', 'y', 'z'];
     const layers = [0, 1, 2];
@@ -374,10 +386,10 @@ const RubiksCube: React.FC = () => {
       };
       
       animationQueueRef.current.push(move);
-      scrambleHistoryRef.current.push(move);
+      scrambleHistoryRef.current.push(move); // Add to history
     }
 
-    console.log(`Added ${numScrambleMoves} moves to queue.`);
+    console.log(`Added ${numScrambleMoves} moves to queue. Total history: ${scrambleHistoryRef.current.length}`);
     processAnimationQueue();
   };
 
@@ -388,6 +400,7 @@ const RubiksCube: React.FC = () => {
     console.log("Queueing solve moves (reversing scramble)...");
     setButtonsDisabled(true);
     clearMovesDisplay();
+    setCurrentSequenceType('solve');
     
     // Create reversed moves with inverted angles
     const solveMoves = scrambleHistoryRef.current.slice().reverse().map(move => ({
@@ -397,10 +410,40 @@ const RubiksCube: React.FC = () => {
     }));
     
     animationQueueRef.current.push(...solveMoves);
-    scrambleHistoryRef.current = [];
+    scrambleHistoryRef.current = []; // Clear history AFTER queueing the solve moves
     
     console.log(`Added ${solveMoves.length} solve moves to queue.`);
     processAnimationQueue();
+  };
+
+  // Organize moves into rows for display
+  const renderMoveRows = () => {
+    const rows = [];
+    let currentRow = [];
+    
+    for (let i = 0; i < moves.length; i++) {
+      currentRow.push(moves[i]);
+      
+      // Create a new row after every 4 moves or if it's the last move
+      if (currentRow.length === 4 || i === moves.length - 1) {
+        rows.push([...currentRow]);
+        currentRow = [];
+      }
+    }
+    
+    return rows.map((row, rowIndex) => (
+      <div key={`row-${rowIndex}`} className="grid grid-cols-4 gap-1 mb-0.5">
+        {row.map((move, moveIndex) => (
+          <span 
+            key={`${rowIndex}-${moveIndex}`} 
+            className={`font-mono text-sm text-center p-px rounded whitespace-nowrap
+              ${move.type === 'scramble' ? 'text-emerald-400' : 'text-blue-400'}`}
+          >
+            {move.notation}
+          </span>
+        ))}
+      </div>
+    ));
   };
 
   return (
@@ -413,17 +456,13 @@ const RubiksCube: React.FC = () => {
       {/* Container for the 3D scene */}
       <div ref={containerRef} id="container" className="absolute top-0 left-0 w-full h-full z-1"></div>
       
-      {/* Moves display panel */}
+      {/* Moves display panel - Enhanced version */}
       <div 
         ref={movesDisplayRef}
         id="moves-display" 
-        className="absolute top-24 right-5 w-20 max-h-[calc(100vh-180px)] p-2.5 bg-slate-900/80 rounded-lg overflow-y-auto z-5 shadow-[0_0_15px_rgba(50,205,50,0.4)] border border-[rgba(50,205,50,0.3)]"
+        className="absolute top-24 right-5 w-44 max-h-[calc(100vh-180px)] p-2.5 bg-slate-900/85 rounded-lg overflow-y-auto z-5 shadow-[0_0_15px_rgba(50,205,50,0.4)] border border-[rgba(50,205,50,0.3)]"
       >
-        {moves.map((move, index) => (
-          <p key={index} className="text-emerald-400 font-mono text-sm m-0.5 text-center whitespace-nowrap">
-            {move}
-          </p>
-        ))}
+        {renderMoveRows()}
       </div>
       
       {/* Controls */}
@@ -440,7 +479,7 @@ const RubiksCube: React.FC = () => {
           id="solveButton" 
           className="py-2.5 px-5 rounded-md font-medium text-sm text-emerald-50 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           onClick={solveCubeAnimated}
-          disabled={buttonsDisabled}
+          disabled={buttonsDisabled || scrambleHistoryRef.current.length === 0}
         >
           Solve
         </button>

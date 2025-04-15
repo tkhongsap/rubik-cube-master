@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rubik's Cube Simulation (Fix Multi-Scramble Solve)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <style>
+        /* Base styles */
+        body {
+            margin: 0; overflow: hidden; font-family: 'Inter', sans-serif;
+            background: linear-gradient(to bottom right, #f8fafc, #e2e8f0);
+        }
+        #container {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            display: block; z-index: 1;
+        }
+        /* Top Bar */
+        #top-bar {
+            position: absolute; top: 0; left: 0; width: 100%; padding: 1rem;
+            background-color: rgba(255, 255, 255, 0.8); backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px); box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            z-index: 10; text-align: center;
+        }
+        #top-bar h1 { margin: 0; font-size: 1.125rem; font-weight: 600; color: #1e293b; }
+        /* Controls */
+        #controls {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 0.75rem; padding: 0.75rem;
+            background-color: rgba(255, 255, 255, 0.75); backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px); border-radius: 0.75rem;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0,0,0,0.08);
+            z-index: 10;
+        }
+        /* Buttons */
+        button {
+            padding: 0.6rem 1.2rem; border: none; border-radius: 0.375rem;
+            font-weight: 500; font-size: 0.875rem; color: white; cursor: pointer;
+            transition: background-color 0.15s ease-in-out, opacity 0.15s ease-in-out;
+            outline: none;
+        }
+        button:focus-visible { box-shadow: 0 0 0 2px #f8fafc, 0 0 0 4px #64748b; }
+        #scrambleButton { background-color: #0f172a; color: #f8fafc; }
+        #scrambleButton:not(:disabled):hover { background-color: #1e293b; }
+        #solveButton { background-color: #059669; color: #ecfdf5; }
+        #solveButton:not(:disabled):hover { background-color: #047857; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* --- Styling for the Moves Display Panel (Enhanced) --- */
+        #moves-display {
+            position: absolute;
+            top: 90px; /* Below top bar */
+            right: 20px;
+            width: 180px; /* Increased width for 4 moves */
+            max-height: calc(100vh - 180px); /* Limit height */
+            padding: 10px;
+            background-color: rgba(15, 23, 42, 0.85); /* Dark slate-900 background */
+            border-radius: 8px;
+            overflow-y: auto; /* Use auto scroll, but hide bar */
+            z-index: 5;
+            box-shadow: 0 0 15px rgba(50, 205, 50, 0.4); /* Subtle green glow */
+            border: 1px solid rgba(50, 205, 50, 0.3); /* Faint green border */
+        }
+        /* Style for each row of moves */
+        .move-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr); /* 4 equal columns */
+            gap: 4px; /* Small gap between moves in a row */
+            margin-bottom: 2px; /* Small spacing between rows */
+        }
+        /* Style for each individual move item */
+        .move-item {
+            font-family: 'Monospace', monospace;
+            font-size: 0.9rem;
+            text-align: center;
+            padding: 1px 3px; /* Small padding */
+            border-radius: 3px; /* Slightly rounded corners */
+            white-space: nowrap;
+        }
+        /* Color coding for moves */
+        .scramble-move {
+            color: #34d399; /* Emerald-400 green */
+        }
+        .solve-move {
+            color: #60a5fa; /* Blue-400 */
+        }
+
+        /* Hide scrollbar */
+        #moves-display::-webkit-scrollbar { display: none; }
+        #moves-display { -ms-overflow-style: none; scrollbar-width: none; }
+
+    </style>
+</head>
+<body>
+    <div id="top-bar"><h1>Rubik's Cube Simulation</h1></div>
+    <div id="container"></div>
+    <div id="moves-display"></div>
+    <div id="controls">
+        <button id="scrambleButton">Scramble</button>
+        <button id="solveButton">Solve</button>
+    </div>
+
+    <script>
+        // --- Global Variables ---
+        let scene, camera, renderer, controls;
+        const cubeGroup = new THREE.Group();
+        const cubieSize = 1; const spacing = 0.05; const totalCubieSize = cubieSize + spacing;
+        const N = 3; const halfN = (N - 1) / 2;
+        let isAnimating = false; const animationQueue = []; let scrambleHistory = []; // scrambleHistory will now accumulate
+        const animationDuration = 300;
+        const movesDisplayElement = document.getElementById('moves-display');
+
+        // --- Move Display State ---
+        let currentMoveRowElement = null;
+        let movesInCurrentRow = 0;
+        let currentSequenceType = null;
+
+        const colors = { /* ... colors ... */
+            right:  new THREE.Color(0x0000FF), left:   new THREE.Color(0x00FF00),
+            top:    new THREE.Color(0xFFFFFF), bottom: new THREE.Color(0xFFFF00),
+            front:  new THREE.Color(0xFF0000), back:   new THREE.Color(0xFFA500),
+            inside: new THREE.Color(0x333333) };
+
+        // --- Initialization ---
+        function init() { /* ... init logic ... */
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 4, 7); camera.lookAt(scene.position);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false; controls.minDistance = 5; controls.maxDistance = 20;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            directionalLight.position.set(5, 10, 7.5); scene.add(directionalLight);
+
+            createCube(); scene.add(cubeGroup);
+
+            document.getElementById('scrambleButton').addEventListener('click', scrambleCube);
+            document.getElementById('solveButton').addEventListener('click', solveCubeAnimated);
+            window.addEventListener('resize', onWindowResize, false);
+
+            animate();
+         }
+
+        // --- Create Cube ---
+        function createCube() { /* ... create cube logic ... */
+            while(cubeGroup.children.length > 0){ cubeGroup.remove(cubeGroup.children[0]); }
+            scrambleHistory = []; // Reset history ONLY on full cube creation/reset
+            clearMovesDisplay();
+            const geometry = new THREE.BoxGeometry(cubieSize, cubieSize, cubieSize);
+            for (let x = 0; x < N; x++) { for (let y = 0; y < N; y++) { for (let z = 0; z < N; z++) {
+                if (x > 0 && x < N - 1 && y > 0 && y < N - 1 && z > 0 && z < N - 1) continue;
+                const materials = [ /* ... materials ... */
+                    (x === N - 1) ? new THREE.MeshStandardMaterial({ color: colors.right }) : new THREE.MeshStandardMaterial({ color: colors.inside }),
+                    (x === 0) ? new THREE.MeshStandardMaterial({ color: colors.left }) : new THREE.MeshStandardMaterial({ color: colors.inside }),
+                    (y === N - 1) ? new THREE.MeshStandardMaterial({ color: colors.top }) : new THREE.MeshStandardMaterial({ color: colors.inside }),
+                    (y === 0) ? new THREE.MeshStandardMaterial({ color: colors.bottom }) : new THREE.MeshStandardMaterial({ color: colors.inside }),
+                    (z === N - 1) ? new THREE.MeshStandardMaterial({ color: colors.front }) : new THREE.MeshStandardMaterial({ color: colors.inside }),
+                    (z === 0) ? new THREE.MeshStandardMaterial({ color: colors.back }) : new THREE.MeshStandardMaterial({ color: colors.inside })];
+                const cubie = new THREE.Mesh(geometry, materials);
+                cubie.position.set((x - halfN) * totalCubieSize, (y - halfN) * totalCubieSize, (z - halfN) * totalCubieSize);
+                cubie.userData.initialWorldPos = cubie.position.clone(); cubeGroup.add(cubie);
+            }}}
+            setButtonsEnabled(true);
+        }
+
+         // --- UI Control ---
+         function setButtonsEnabled(enabled) { /* ... enable/disable buttons ... */
+             document.getElementById('scrambleButton').disabled = !enabled;
+             document.getElementById('solveButton').disabled = !enabled; }
+
+        // --- Move Notation and Display (Enhanced) ---
+
+        function getMoveNotation(axis, layerIndex, angle) { /* ... getMoveNotation logic (unchanged) ... */
+            const clockwise = angle > 0; const prime = "'";
+            if (layerIndex === N - 1) {
+                if (axis === 'y') return clockwise ? "U'" : "U"; if (axis === 'x') return clockwise ? "R" : "R'"; if (axis === 'z') return clockwise ? "F" : "F'";
+            }
+            if (layerIndex === 0) {
+                if (axis === 'y') return clockwise ? "D" : "D'"; if (axis === 'x') return clockwise ? "L'" : "L"; if (axis === 'z') return clockwise ? "B'" : "B";
+            }
+            if (layerIndex === 1) {
+                 if (axis === 'y') return clockwise ? "E" : "E'"; if (axis === 'x') return clockwise ? "M'" : "M"; if (axis === 'z') return clockwise ? "S" : "S'";
+            } return "?";
+        }
+
+        function addMoveToDisplay(notation, moveType) { /* ... addMoveToDisplay logic (unchanged) ... */
+            if (!movesDisplayElement) return;
+            if (currentMoveRowElement === null || movesInCurrentRow >= 4) {
+                currentMoveRowElement = document.createElement('div');
+                currentMoveRowElement.className = 'move-row';
+                movesDisplayElement.appendChild(currentMoveRowElement);
+                movesInCurrentRow = 0;
+            }
+            const moveElement = document.createElement('span');
+            moveElement.textContent = notation;
+            moveElement.className = 'move-item ' + (moveType === 'scramble' ? 'scramble-move' : 'solve-move');
+            currentMoveRowElement.appendChild(moveElement);
+            movesInCurrentRow++;
+            movesDisplayElement.scrollTop = movesDisplayElement.scrollHeight;
+        }
+
+        function clearMovesDisplay() { /* ... clearMovesDisplay logic (unchanged) ... */
+             if (!movesDisplayElement) return;
+             movesDisplayElement.innerHTML = '';
+             currentMoveRowElement = null;
+             movesInCurrentRow = 0;
+        }
+
+
+        // --- Cube Operations ---
+        function getLayer(axis, layerIndex) { /* ... get layer logic ... */
+            const layer = []; const threshold = totalCubieSize * (layerIndex - halfN); const tolerance = 0.1;
+            cubeGroup.children.forEach(cubie => { if (Math.abs(cubie.userData.initialWorldPos[axis] - threshold) < tolerance) layer.push(cubie); });
+            return layer; }
+
+        // --- Animation Queue Processing ---
+        function processAnimationQueue() { /* ... processAnimationQueue logic (unchanged) ... */
+            if (isAnimating || animationQueue.length === 0) {
+                if (!isAnimating && animationQueue.length === 0) {
+                    setButtonsEnabled(true); console.log("Animation queue complete.");
+                    currentSequenceType = null;
+                } return;
+            }
+            isAnimating = true; setButtonsEnabled(false);
+            const move = animationQueue.shift();
+            const notation = getMoveNotation(move.axis, move.layerIndex, move.angle);
+            addMoveToDisplay(notation, currentSequenceType);
+            animateLayerRotation(move.axis, move.layerIndex, move.angle);
+        }
+
+        // Animate the rotation of a layer
+        function animateLayerRotation(axis, layerIndex, angle) { /* ... animation logic ... */
+            const layer = getLayer(axis, layerIndex); const pivot = new THREE.Object3D(); scene.add(pivot);
+            layer.forEach(cubie => { pivot.attach(cubie); });
+            const targetRotation = {}; targetRotation[axis] = angle;
+            const tween = new TWEEN.Tween(pivot.rotation)
+                .to(targetRotation, animationDuration).easing(TWEEN.Easing.Quadratic.InOut)
+                .onComplete(() => {
+                    layer.forEach(cubie => { /* ... update cubie positions/rotations ... */
+                        cubie.updateMatrixWorld(); const wp = new THREE.Vector3(); const wq = new THREE.Quaternion();
+                        cubie.getWorldPosition(wp); cubie.getWorldQuaternion(wq); cubeGroup.attach(cubie);
+                        const lx=Math.round(wp.x/totalCubieSize)+halfN; const ly=Math.round(wp.y/totalCubieSize)+halfN; const lz=Math.round(wp.z/totalCubieSize)+halfN;
+                        cubie.userData.initialWorldPos.set((lx-halfN)*totalCubieSize, (ly-halfN)*totalCubieSize, (lz-halfN)*totalCubieSize);
+                        cubie.position.copy(wp); cubie.quaternion.copy(wq);
+                        cubie.position.x = Math.round(cubie.position.x/totalCubieSize)*totalCubieSize;
+                        cubie.position.y = Math.round(cubie.position.y/totalCubieSize)*totalCubieSize;
+                        cubie.position.z = Math.round(cubie.position.z/totalCubieSize)*totalCubieSize;
+                        snapRotation(cubie); });
+                    scene.remove(pivot); isAnimating = false; processAnimationQueue();
+                }).start();
+        }
+
+        // Helper to snap rotation
+        function snapRotation(object) { /* ... snap rotation logic ... */
+            const euler = new THREE.Euler().setFromQuaternion(object.quaternion, 'XYZ');
+            euler.x = Math.round(euler.x / (Math.PI / 2)) * (Math.PI / 2); euler.y = Math.round(euler.y / (Math.PI / 2)) * (Math.PI / 2); euler.z = Math.round(euler.z / (Math.PI / 2)) * (Math.PI / 2);
+            object.quaternion.setFromEuler(euler); }
+
+        // Scramble the cube
+        function scrambleCube() {
+            if (isAnimating) return; console.log("Queueing scramble moves..."); setButtonsEnabled(false);
+            currentSequenceType = 'scramble';
+            const moves = ['x', 'y', 'z']; const layers = [0, 1, 2]; const angles = [Math.PI / 2, -Math.PI / 2];
+            const numScrambleMoves = 20;
+            // *** FIX: Do NOT reset scrambleHistory here. Append to it. ***
+            // scrambleHistory = []; // <--- REMOVED THIS LINE
+
+            for (let i = 0; i < numScrambleMoves; i++) {
+                const randomAxis = moves[Math.floor(Math.random() * moves.length)];
+                const randomLayer = layers[Math.floor(Math.random() * layers.length)];
+                const randomAngle = angles[Math.floor(Math.random() * angles.length)];
+                const move = { axis: randomAxis, layerIndex: randomLayer, angle: randomAngle };
+                animationQueue.push(move);
+                scrambleHistory.push(move); // Add to the potentially existing history
+            }
+            console.log(`Added ${numScrambleMoves} moves to queue. Total history: ${scrambleHistory.length}`); processAnimationQueue();
+        }
+
+        // Solve the cube
+        function solveCubeAnimated() {
+             if (isAnimating || scrambleHistory.length === 0) return; console.log("Queueing solve moves (reversing scramble)..."); setButtonsEnabled(false);
+             currentSequenceType = 'solve';
+             // Reverse the *entire accumulated* history
+             const solveMoves = scrambleHistory.slice().reverse().map(move => ({ axis: move.axis, layerIndex: move.layerIndex, angle: -move.angle }));
+             animationQueue.push(...solveMoves);
+             scrambleHistory = []; // Clear history AFTER queueing the solve moves
+             console.log(`Added ${solveMoves.length} solve moves to queue.`); processAnimationQueue();
+        }
+
+        // --- Animation Loop ---
+        function animate(time) { /* ... animation loop ... */
+            requestAnimationFrame(animate); TWEEN.update(time); controls.update(); renderer.render(scene, camera); }
+
+        // --- Event Handlers ---
+        function onWindowResize() { /* ... resize handler ... */
+             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+             renderer.setSize(window.innerWidth, window.innerHeight); }
+
+        // --- Start ---
+        init();
+
+    </script>
+</body>
+</html>
